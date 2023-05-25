@@ -1,0 +1,20 @@
+[package]
+name = "login_server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+argon2 = "0.5.0"
+axum = { version = "0.6.11", features = ["http2", "headers", "macros"] }
+form_urlencoded = "1.1.0"
+lettre = { version = "0.10.4", features = ["sendmail-transport"] }
+mysql_async = "0.31.3"
+rand = "0.8.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.94"
+tokio = { version = "1.26.0", features = ["full"] }
+tower-http = { version = "0.4.0", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
