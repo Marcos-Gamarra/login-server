@@ -80,7 +80,6 @@ async fn test() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
     let pool = mysql_async::Pool::new("mysql://menutrack:hellothere@localhost:3306/MenutrackLogin");
 
     let app = Router::new()
@@ -98,7 +97,6 @@ async fn main() {
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    tracing::debug!("listening on {}", addr);
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
