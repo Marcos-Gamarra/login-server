@@ -80,7 +80,8 @@ async fn test(State(db_conn_pool): State<DatabaseConnection>) -> impl IntoRespon
 
 #[tokio::main]
 async fn main() {
-    let db_url = "mysql://menutrack:hellothere@localhost:3306/MenutrackLogin";
+    //read DATABASE_URL env variable
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let db_conn_pool: DatabaseConnection = sea_orm::Database::connect(db_url).await.unwrap();
 
     let app = Router::new()
