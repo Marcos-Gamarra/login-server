@@ -1,3 +1,4 @@
+use crate::entity::unverified_emails::Entity as UnverifiedEmails;
 use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
@@ -5,29 +6,23 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use sea_orm::entity::*;
+use sea_orm::DatabaseConnection;
 use std::net::SocketAddr;
 use tower_http::cors;
+
+use crate::login::UserCredentials;
+
+mod entity;
 mod login;
-
-use crate::login::{RegistrationError, UserCredentials};
-
 // Handle the registration request
 async fn sign_up(
-    State(pool): State<mysql_async::Pool>,
+    State(db_conn_pool): State<sea_orm::DatabaseConnection>,
     Json(login_credentials): Json<UserCredentials>,
 ) -> impl IntoResponse {
     let mut body_message = std::collections::HashMap::new();
-    if let Err(e) = login::insert_credentials(&pool, login_credentials).await {
-        match e {
-            RegistrationError::EmailAlreadyExists => {
-                body_message.insert("error", "Email already exists");
-                return (StatusCode::CONFLICT, Json(body_message));
-            }
-            RegistrationError::GenericError => {
-                body_message.insert("error", "Generic error");
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(body_message));
-            }
-        }
+    if let Err(_) = login::insert_credentials(&db_conn_pool, login_credentials).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(body_message));
     }
 
     body_message.insert("success", "User registered");
@@ -36,11 +31,11 @@ async fn sign_up(
 
 // Handle the login request. Verify that the email and password are correct
 async fn verify_credentials(
-    State(pool): State<mysql_async::Pool>,
+    State(db_conn_pool): State<sea_orm::DatabaseConnection>,
     Json(login_credentials): Json<UserCredentials>,
 ) -> impl IntoResponse {
     let mut body_message = std::collections::HashMap::new();
-    if login::verify_credentials(&pool, login_credentials).await {
+    if login::verify_credentials(&db_conn_pool, login_credentials).await {
         body_message.insert("success", "User verified");
         return (StatusCode::OK, Json(body_message));
     }
@@ -49,14 +44,13 @@ async fn verify_credentials(
     (StatusCode::UNAUTHORIZED, Json(body_message))
 }
 
-
 //
 async fn verify_email(
-    State(pool): State<mysql_async::Pool>,
+    State(db_conn_pool): State<sea_orm::DatabaseConnection>,
     Path((email, token)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let mut body_message = std::collections::HashMap::new();
-    if login::verify_email(&pool, email, token).await {
+    if login::verify_email(&db_conn_pool, email, token).await {
         body_message.insert("success", "Email verified");
         return (StatusCode::OK, Json(body_message));
     }
@@ -66,21 +60,28 @@ async fn verify_email(
 }
 
 async fn test_verification_email(
-    State(pool): State<mysql_async::Pool>,
+    State(db_conn_pool): State<sea_orm::DatabaseConnection>,
     Json(user): Json<UserCredentials>,
 ) -> impl IntoResponse {
-    login::register_unverified_email(&pool, user).await;
+    if let Err(_) = login::insert_unverified_email(&db_conn_pool, user).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "error");
+    }
 
     (StatusCode::OK, "Email sent")
 }
 
-async fn test() -> impl IntoResponse {
+async fn test(State(db_conn_pool): State<DatabaseConnection>) -> impl IntoResponse {
+    let email = UnverifiedEmails::find().one(&db_conn_pool).await.unwrap();
+    if let Some(email) = email {
+        println!("Email: {}", email.email);
+    }
     (StatusCode::OK, "Hello, world!")
 }
 
 #[tokio::main]
 async fn main() {
-    let pool = mysql_async::Pool::new("mysql://menutrack:hellothere@localhost:3306/MenutrackLogin");
+    let db_url = "mysql://menutrack:hellothere@localhost:3306/MenutrackLogin";
+    let db_conn_pool: DatabaseConnection = sea_orm::Database::connect(db_url).await.unwrap();
 
     let app = Router::new()
         .route("/test", get(test))
@@ -94,7 +95,7 @@ async fn main() {
                 .allow_methods(cors::Any)
                 .allow_headers(cors::Any),
         )
-        .with_state(pool);
+        .with_state(db_conn_pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 

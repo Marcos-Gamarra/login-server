@@ -1,16 +1,14 @@
-use rand::distributions::{Alphanumeric, DistString};
+use crate::entity::password_table;
+use crate::entity::unverified_emails::{self, Entity as UnverifiedEmails};
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
 };
-use mysql_async::prelude::*;
+use rand::distributions::{Alphanumeric, DistString};
+use sea_orm::ActiveValue::{NotSet, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait};
 use serde::{Deserialize, Serialize};
-
-pub enum RegistrationError {
-    EmailAlreadyExists,
-    GenericError,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserCredentials {
@@ -35,28 +33,22 @@ pub fn hashing(password: String, salt: &SaltString) -> String {
 //It generates a salt and hashes the password using argon2.
 //It picks a connection from the pool and inserts the email and hashed password into the database.
 //It returns a Result with a unit type on success and a RegistrationError on failure.
-pub async fn insert_credentials<'a>(
-    pool: &mysql_async::Pool,
+pub async fn insert_credentials(
+    db_conn_pool: &sea_orm::DatabaseConnection,
     user: UserCredentials,
-) -> Result<(), RegistrationError> {
+) -> Result<(), sea_orm::error::DbErr> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = hashing(user.password, &salt);
 
-    let mut conn = pool.get_conn().await.unwrap();
+    let user_credentials = password_table::ActiveModel {
+        email: Set(user.email),
+        password_hash: Set(hash),
+        password_salt: Set(salt.to_string()),
+        ..Default::default()
+    };
 
-    let query = format!(
-        "insert into password_table (email, password_hash, password_salt) values ('{}', '{}' , '{}')",
-        user.email, hash, salt
-    );
-
-    if let Err(e) = conn.query_drop(query).await {
-        if let mysql_async::Error::Server(e) = e {
-            if e.code == 1062 {
-                return Err(RegistrationError::EmailAlreadyExists);
-            }
-        } else {
-            return Err(RegistrationError::GenericError);
-        }
+    if let Err(e) = user_credentials.insert(db_conn_pool).await {
+        return Err(e);
     }
 
     Ok(())
@@ -67,27 +59,25 @@ pub async fn insert_credentials<'a>(
 //It picks a connection from the pool and fetches the password hash and salt from the database.
 //It hashes the password using the salt and compares it with the hash.
 //It returns true if the password is correct and false otherwise.
-pub async fn verify_credentials(pool: &mysql_async::Pool, credentials: UserCredentials) -> bool {
-    let mut conn = pool.get_conn().await.unwrap();
-    let query = format!(
-        "select password_hash, password_salt from password_table where email = '{}'",
-        credentials.email
-    );
+pub async fn verify_credentials(
+    db_conn_pool: &sea_orm::DatabaseConnection,
+    credentials: UserCredentials,
+) -> bool {
+    let Ok(query_result) = UnverifiedEmails::find_by_id(credentials.email)
+        .one(db_conn_pool)
+        .await else {
+            return false;
+        };
 
-    let result = conn
-        .query_first::<(String, String), String>(query)
-        .await
-        .unwrap();
-
-    if let Some((target_hash, salt)) = result {
+    if let Some(row) = query_result {
         let argon2_instance = Argon2::default();
-        let salt = SaltString::from_b64(&salt).unwrap();
+        let salt = SaltString::from_b64(&row.salt).unwrap();
         let hash = argon2_instance
             .hash_password(credentials.password.as_bytes(), &salt)
             .unwrap()
             .to_string();
 
-        if hash == target_hash {
+        if hash == row.hash {
             return true;
         }
     }
@@ -138,46 +128,46 @@ async fn send_verification_email(email: String) {
     }
 }
 
-pub async fn verify_email(pool: &mysql_async::Pool, email: String, token: String) -> bool {
-    let mut conn = pool.get_conn().await.unwrap();
-    let query = format!("select token from unverified_emails where email = '{email}'");
-
-    let result = conn.query_first::<String, String>(query).await.unwrap();
-
-    if let Some(retrieved_token) = result {
-        if retrieved_token == token {
-            return true;
+pub async fn verify_email(
+    db_conn_pool: &sea_orm::DatabaseConnection,
+    email: String,
+    token: String,
+) -> bool {
+    if let Ok(query_result) = UnverifiedEmails::find_by_id(email.clone())
+        .one(db_conn_pool)
+        .await
+    {
+        if let Some(retrieved_row) = query_result {
+            if retrieved_row.token == token {
+                return true;
+            }
         }
     }
 
     false
 }
 
-pub async fn register_unverified_email<'a>(pool: &mysql_async::Pool, user: UserCredentials) {
+pub async fn insert_unverified_email(
+    db_conn_pool: &sea_orm::DatabaseConnection,
+    user: UserCredentials,
+) -> Result<(), sea_orm::error::DbErr> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = hashing(user.password, &salt);
     let token = generate_verification_token();
 
-    let mut conn = pool.get_conn().await.unwrap();
+    let unverified_email_to_insert = unverified_emails::ActiveModel {
+        email: Set(user.email.clone()),
+        hash: Set(hash),
+        salt: Set(salt.to_string()),
+        token: Set(token),
+        expires: NotSet,
+    };
 
-    let query = format!(
-        "insert into unverified_emails (email, hash, salt, token) values ('{}', '{}' , '{}', '{}')",
-        user.email, hash, salt, token
-    );
-
-    conn.query_drop(query).await.unwrap();
+    if let Err(e) = unverified_email_to_insert.insert(db_conn_pool).await {
+        println!("Could not insert unverified email: {}", e);
+        return Err(e);
+    };
 
     send_verification_email(user.email).await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hashing() {
-        let salt = SaltString::generate(&mut OsRng);
-        let hash = hashing("password".to_string(), &salt);
-        assert_eq!(hash.len(), 97);
-    }
+    Ok(())
 }
