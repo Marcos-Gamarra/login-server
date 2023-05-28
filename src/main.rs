@@ -21,7 +21,7 @@ async fn sign_up(
     Json(login_credentials): Json<UserCredentials>,
 ) -> impl IntoResponse {
     let mut body_message = std::collections::HashMap::new();
-    if let Err(_) = login::insert_credentials(&db_conn_pool, login_credentials).await {
+    if let Err(_) = login::handle_sign_up_request(&db_conn_pool, login_credentials).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(body_message));
     }
 
@@ -50,7 +50,7 @@ async fn verify_email(
     Path((email, token)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let mut body_message = std::collections::HashMap::new();
-    if login::verify_email(&db_conn_pool, email, token).await {
+    if let Ok(_) = login::handle_email_verification_attemp(&db_conn_pool, email, token).await {
         body_message.insert("success", "Email verified");
         return (StatusCode::OK, Json(body_message));
     }
@@ -63,7 +63,7 @@ async fn test_verification_email(
     State(db_conn_pool): State<sea_orm::DatabaseConnection>,
     Json(user): Json<UserCredentials>,
 ) -> impl IntoResponse {
-    if let Err(_) = login::insert_unverified_email(&db_conn_pool, user).await {
+    if let Err(_) = login::handle_sign_up_request(&db_conn_pool, user).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, "error");
     }
 

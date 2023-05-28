@@ -9,10 +9,10 @@ pub struct Model {
     pub user_id: i32,
     #[sea_orm(unique)]
     pub email: String,
-    pub password_hash: String,
-    pub password_salt: String,
+    pub salt: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    pub hash: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
